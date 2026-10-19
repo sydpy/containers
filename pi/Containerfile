@@ -1,0 +1,31 @@
+# Pi coding agent image, on top of the podman-in-podman base image from
+# ../base/Containerfile. Build the base images first with `make -C base`.
+# The base image ends as the main user (UID 1000) with HOME set, and has
+# Node.js, with `npm install -g` going to ~/.local.
+#
+# Pi has MCP and codemode built in. The image turns codemode on for every
+# session, and adds subagents (the subagent example extension shipped in the
+# pi package) and web access (the pi-web-access package).
+
+ARG BASE_IMAGE=localhost/base/podman-in-podman:latest
+
+FROM ${BASE_IMAGE}
+
+# npm releases, pinned. Upgrade by changing them and rebuilding.
+ARG PI_VERSION=1.3.0
+ARG PI_WEB_ACCESS_VERSION=0.42.0
+
+# Turns off the pi.dev latest-version check, install and update telemetry,
+# and the provider attribution headers. A newer pi comes from a rebuild with
+# a new PI_VERSION, not from `pi update`.
+ENV PI_SKIP_VERSION_CHECK=1 \
+    PI_TELEMETRY=0
+
+# pi's install instructions skip install scripts; the package needs none.
+# Binaries go to ~/.local/bin.
+RUN npm install -g --no-fund --no-audit --ignore-scripts \
+        "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+ && npm cache clean --force \
+ && pi --version
+
+CMD ["pi"]

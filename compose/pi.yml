@@ -1,0 +1,70 @@
+services:
+  pi:
+    # Built FROM localhost/base/podman-in-podman; run `make -C base` first.
+    # CT_USERNAME must match the USERNAME the base images were built
+    # with, since it names the home directory.
+    build:
+      context: ../pi
+    image: localhost/pi:latest
+    stdin_open: true
+    tty: true
+    init: true
+    # The image's main user (UID 1000) runs as the host user, so it can write
+    # to the project mounted on /workspace. Container root and every other UID
+    # map to the host user's subordinate UIDs.
+    userns_mode: keep-id:uid=1000,gid=1000
+    # Rootless podman inside the agent (see the podman-in-podman target in
+    # ../base/Containerfile). pasta needs /dev/net/tun to give inner
+    # containers a network, and fuse-overlayfs needs /dev/fuse for the inner
+    # podman's storage.
+    devices:
+      - /dev/net/tun
+      - /dev/fuse
+    # The inner podman's runtime state (XDG_RUNTIME_DIR in the image) must be
+    # empty at each start, which a tmpfs is even when the container is kept.
+    # U makes the image's user (UID 1000) its owner; podman has no uid= or
+    # gid= tmpfs options.
+    tmpfs:
+      - /run/user/1000:mode=0700,U
+    security_opt:
+      # The inner podman mounts a fresh /proc for each container, which the
+      # kernel refuses while parts of the outer /proc are masked or read-only.
+      # With rootless host podman, the unmasked files are still protected by
+      # their host owners and modes.
+      - unmask=ALL
+      # The SELinux type for container engines running inside a container.
+      # Hosts without SELinux ignore it.
+      - label=type:container_engine_t
+    # Only some of the host's ~/.pi/agent: the global instructions, the MCP
+    # servers and the skills. The whole directory would let anything running
+    # in the container read the host's auth.json and mcp-auth.json, and the
+    # sessions of every other project, and would hide the image's
+    # settings.json, which turns on codemode and loads pi-web-access, and its
+    # subagent extension, agents and prompts. Everything else pi writes under
+    # ~/.pi/agent, sessions and MCP sign-ins included, stays in the container
+    # and is lost when it is removed. Each path must exist on the host, or
+    # podman refuses to start the container (statfs: no such file or
+    # directory). Before the first run, create any that are missing: an empty
+    # AGENTS.md, an mcp.json holding { "mcpServers": {} }, and an empty
+    # skills/ directory.
+    #
+    # Files are read-only bind mounts, since overlay mounts only take
+    # directories, so `pi mcp add` and exposure changes in /mcp fail inside
+    # the container; edit mcp.json on the host and run /reload instead. The
+    # skills directory is an overlay mount (:O): the host directory is the
+    # read-only lower layer, and writes go to an upper layer that is
+    # discarded whenever the container stops.
+    volumes:
+      - ${HOME}/.pi/agent/AGENTS.md:/home/${CT_USERNAME:-user}/.pi/agent/AGENTS.md:ro
+      - ${HOME}/.pi/agent/mcp.json:/home/${CT_USERNAME:-user}/.pi/agent/mcp.json:ro
+      - ${HOME}/.pi/agent/skills:/home/${CT_USERNAME:-user}/.pi/agent/skills:O
+      - ${CT_WORKSPACE:-pi_workspace}:/workspace
+
+volumes:
+  pi_workspace:
+
+# podman-compose puts the services in a pod by default, and podman refuses
+# userns_mode for a container in a pod (--userns and --pod cannot be set
+# together).
+x-podman:
+  in_pod: false
