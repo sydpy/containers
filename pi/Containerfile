@@ -13,7 +13,6 @@ FROM ${BASE_IMAGE}
 
 # npm releases, pinned. Upgrade by changing them and rebuilding.
 ARG PI_VERSION=1.3.0
-ARG PI_WEB_ACCESS_VERSION=0.42.0
 
 # Turns off the pi.dev latest-version check, install and update telemetry,
 # and the provider attribution headers. A newer pi comes from a rebuild with
@@ -26,6 +25,11 @@ ENV PI_SKIP_VERSION_CHECK=1 \
 RUN npm install -g --no-fund --no-audit --ignore-scripts \
         "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && npm cache clean --force \
- && pi --version
+ && pi --version \
+ && pi install npm:pi-subagents \
+ && pi install npm:pi-pigment \
+ && pi install npm:pi-web-access \
+ && pi install npm:@juicesharp/rpiv-ask-user-question \
+ && pi install npm:@juicesharp/rpiv-todo
 
 CMD ["pi"]
