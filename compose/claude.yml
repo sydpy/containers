@@ -1,0 +1,82 @@
+services:
+  claude:
+    # Built FROM localhost/base/podman-in-podman; run `make -C base` first.
+    # CT_USERNAME must match the USERNAME the base images were built
+    # with, since it names the home directory.
+    build:
+      context: ../claude
+    image: localhost/claude:latest
+    stdin_open: true
+    tty: true
+    init: true
+    # The image's main user (UID 1000) runs as the host user, so it can write
+    # to the project mounted on /workspace. Container root and every other UID
+    # map to the host user's subordinate UIDs.
+    userns_mode: keep-id:uid=1000,gid=1000
+    # Rootless podman inside the agent (see the podman-in-podman target in
+    # ../base/Containerfile). pasta needs /dev/net/tun to give inner
+    # containers a network, and fuse-overlayfs needs /dev/fuse for the inner
+    # podman's storage.
+    devices:
+      - /dev/net/tun
+      - /dev/fuse
+    # The inner podman's runtime state (XDG_RUNTIME_DIR in the image) must be
+    # empty at each start, which a tmpfs is even when the container is kept.
+    # U makes the image's user (UID 1000) its owner; podman has no uid= or
+    # gid= tmpfs options.
+    tmpfs:
+      - /run/user/1000:mode=0700,U
+    security_opt:
+      # The inner podman mounts a fresh /proc for each container, which the
+      # kernel refuses while parts of the outer /proc are masked or read-only.
+      # With rootless host podman, the unmasked files are still protected by
+      # their host owners and modes.
+      - unmask=ALL
+      # The SELinux type for container engines running inside a container.
+      # Hosts without SELinux ignore it.
+      - label=type:container_engine_t
+    # Only the configuration from the host's ~/.claude, not all of it: the
+    # whole directory would let anything running in the container read the
+    # host's login in .credentials.json, and the transcripts and history of
+    # every other project. Everything else Claude Code writes under
+    # ~/.claude stays in the container and is lost when it is removed. Each
+    # path must exist on the host, or podman refuses to start the container
+    # (statfs: no such file or directory). Before the first run, create any
+    # that are missing: an empty CLAUDE.md, a settings.json holding {}, and
+    # empty plugins/ and skills/ directories.
+    #
+    # Files are read-only bind mounts, since overlay mounts only take
+    # directories. Directories are overlay mounts (:O): the host directory is
+    # the read-only lower layer, and writes go to an upper layer that is
+    # discarded whenever the container stops.
+    volumes:
+      - ${HOME}/.claude/CLAUDE.md:/home/${CT_USERNAME:-user}/.claude/CLAUDE.md:ro
+      - ${HOME}/.claude/settings.json:/home/${CT_USERNAME:-user}/.claude/settings.json:ro
+      - ${HOME}/.claude/plugins:/home/${CT_USERNAME:-user}/.claude/plugins:O
+      - ${HOME}/.claude/skills:/home/${CT_USERNAME:-user}/.claude/skills:O
+      - ${CT_WORKSPACE:-claude_workspace}:/workspace
+    # Long-lived login token (about a year) from `claude setup-token`, run on
+    # the host. It is stored once as a podman secret, outside this checkout
+    # and the image, and reaches the container as CLAUDE_CODE_OAUTH_TOKEN:
+    #
+    #   read -rs token && printf '%s' "$token" \
+    #       | podman secret create claude_code_oauth_token - ; unset token
+    #
+    # To replace it, `podman secret rm claude_code_oauth_token` first.
+    secrets:
+      - source: claude_code_oauth_token
+        type: env
+        target: CLAUDE_CODE_OAUTH_TOKEN
+
+volumes:
+  claude_workspace:
+
+secrets:
+  claude_code_oauth_token:
+    external: true
+
+# podman-compose puts the services in a pod by default, and podman refuses
+# userns_mode for a container in a pod (--userns and --pod cannot be set
+# together).
+x-podman:
+  in_pod: false

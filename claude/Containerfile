@@ -1,0 +1,52 @@
+# Claude Code image, on top of the podman-in-podman base image from
+# ../base/Containerfile. Build the base images first with `make -C base`.
+# The base image ends as the main user (UID 1000) with HOME set.
+
+ARG BASE_IMAGE=localhost/base/podman-in-podman:latest
+
+FROM ${BASE_IMAGE}
+
+# Fingerprint of the Claude Code release signing key, as published at
+# https://code.claude.com/docs/en/setup
+ARG CLAUDE_KEY_FPR=31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
+# apt channel: "stable" (about a week old, skips releases with major
+# regressions) or "latest"
+ARG CLAUDE_CHANNEL=stable
+
+# The key is imported into a throwaway keyring and only the key with
+# CLAUDE_KEY_FPR is exported. gpg exports nothing, without failing, if the
+# download holds a different key, so `test -s` fails the build instead.
+USER root
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    install -d -m 0755 /etc/apt/keyrings \
+ && export GNUPGHOME="$(mktemp -d)" \
+ && curl -fsSL https://downloads.claude.ai/keys/claude-code.asc \
+        | gpg --batch --import \
+ && gpg --batch --export "${CLAUDE_KEY_FPR}" > /etc/apt/keyrings/claude-code.gpg \
+ && test -s /etc/apt/keyrings/claude-code.gpg \
+ && gpgconf --kill all \
+ && rm -rf "$GNUPGHOME" \
+ && unset GNUPGHOME \
+ && echo "deb [signed-by=/etc/apt/keyrings/claude-code.gpg] https://downloads.claude.ai/claude-code/apt/${CLAUDE_CHANNEL} ${CLAUDE_CHANNEL} main" \
+        > /etc/apt/sources.list.d/claude-code.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends claude-code
+
+# Turns off update checks, telemetry, error reporting, /feedback and
+# feature-flag fetching, which also makes Remote Control unavailable.
+# Upgrade claude-code by rebuilding this image with --no-cache; a cached
+# rebuild keeps the old package. Only this image's layers are rebuilt, not
+# the base images.
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+USER 1000
+
+# hasCompletedOnboarding skips the first-run setup screens. compose.yml
+# mounts single files and directories into ~/.claude; made here, ~/.claude
+# belongs to the user, so Claude Code can write its sessions and shell
+# snapshots beside them. Otherwise podman would create it owned by root.
+RUN printf '%s\n' '{ "hasCompletedOnboarding": true }' > "${HOME}/.claude.json" \
+ && mkdir "${HOME}/.claude"
+
+CMD ["claude"]

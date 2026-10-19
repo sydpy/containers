@@ -1,0 +1,33 @@
+services:
+  helix:
+    # Built FROM localhost/base/dev; run `make -C base` first. CT_USERNAME
+    # must match the USERNAME the base images were built with, since it
+    # names the home directory.
+    build:
+      context: ../helix
+    image: localhost/helix:latest
+    stdin_open: true
+    tty: true
+    init: true
+    # The image's main user (UID 1000) runs as the host user, so it can write
+    # to the project mounted on /workspace. Container root and every other UID
+    # map to the host user's subordinate UIDs.
+    userns_mode: keep-id:uid=1000,gid=1000
+    # The host's helix config.toml (theme, keys, editor options), read-only.
+    # Only the file, not ~/.config/helix: the image's languages.toml there
+    # sets up the formatters and language servers installed in the image,
+    # and a directory mount would hide it. The file must exist on the host,
+    # or podman refuses to start the container (statfs: no such file or
+    # directory); an empty one will do.
+    volumes:
+      - ${HOME}/.config/helix/config.toml:/home/${CT_USERNAME:-user}/.config/helix/config.toml:ro
+      - ${CT_WORKSPACE:-helix_workspace}:/workspace
+
+volumes:
+  helix_workspace:
+
+# podman-compose puts the services in a pod by default, and podman refuses
+# userns_mode for a container in a pod (--userns and --pod cannot be set
+# together).
+x-podman:
+  in_pod: false

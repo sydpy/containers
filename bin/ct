@@ -1,0 +1,101 @@
+#!/bin/bash
+# Usage: ct [-h] [-w] TOOL [PODMAN-COMPOSE ARGS...]
+# Runs podman-compose on compose/TOOL.yml. -w mounts the current directory on
+# /workspace, as if CT_WORKSPACE=$PWD were set. Arguments after TOOL go to
+# podman-compose unchanged.
+
+# -u makes unset variables an error, so optional ones are read as ${VAR-}.
+set -eu
+
+die() {
+  echo "ct: $*" >&2
+  exit 1
+}
+
+# Names may only use a-z, 0-9, _ and -, because the tool and CT_PROJECT_NAME
+# end up in the project name, and the tool also in a file path.
+is_valid_name() {
+  case $1 in
+    '' | *[!a-z0-9_-]*) return 1 ;; # empty, or a character outside that set
+    *) return 0 ;;
+  esac
+}
+
+list_tools() {
+  local file
+  for file in "$CT_HOME"/compose/*.yml; do
+    [ -e "$file" ] || continue
+    printf '%s ' "$(basename "$file" .yml)"
+  done
+}
+
+print_usage() {
+  echo "usage: ct [-h] [-w] TOOL [PODMAN-COMPOSE ARGS...]"
+  echo "tools: $(list_tools)"
+}
+
+# usage_error [MESSAGE]: prints MESSAGE and the usage to stderr, exits 2.
+usage_error() {
+  if [ $# -gt 0 ]; then
+    echo "ct: $*" >&2
+  fi
+  print_usage >&2
+  exit 2
+}
+
+if [ -z "${CT_HOME-}" ]; then
+  # This script lives in $CT_HOME/bin.
+  script_path=$(readlink -f "$0")
+  bin_dir=$(dirname "$script_path")
+  CT_HOME=$(dirname "$bin_dir")
+fi
+if [ ! -d "$CT_HOME/compose" ]; then
+  die "no compose directory in CT_HOME ($CT_HOME)"
+fi
+
+while getopts hw opt; do
+  case $opt in
+    h)
+      print_usage
+      exit 0
+      ;;
+    w) CT_WORKSPACE=$PWD ;;
+    *) usage_error ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -eq 0 ]; then
+  usage_error
+fi
+tool=$1
+shift
+
+if ! is_valid_name "$tool"; then
+  usage_error "invalid tool name '$tool'"
+fi
+compose_file="$CT_HOME/compose/$tool.yml"
+if [ ! -f "$compose_file" ]; then
+  usage_error "unknown tool '$tool'"
+fi
+
+project="ct-$tool"
+if [ -n "${CT_PROJECT_NAME-}" ]; then
+  if ! is_valid_name "$CT_PROJECT_NAME"; then
+    usage_error "CT_PROJECT_NAME may only contain a-z, 0-9, _ and -"
+  fi
+  project="$project-$CT_PROJECT_NAME"
+fi
+
+# Empty counts as unset, as with ${CT_WORKSPACE:-...} in the compose files.
+if [ -n "${CT_WORKSPACE-}" ]; then
+  if [ ! -d "$CT_WORKSPACE" ]; then
+    die "CT_WORKSPACE: no such directory: $CT_WORKSPACE"
+  fi
+  # The compose files need an absolute path; a relative one would be taken as
+  # a named volume.
+  CT_WORKSPACE=$(readlink -f "$CT_WORKSPACE")
+  export CT_WORKSPACE
+fi
+
+exec podman-compose -f "$compose_file" -p "$project" "$@"

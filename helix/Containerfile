@@ -1,0 +1,149 @@
+# Helix image, on top of the dev base image from ../base/Containerfile,
+# with language servers, linters and formatters for Rust, Python, JS/TS,
+# shell, HTML, CSS, C and C++, and for the TOML, YAML, Markdown,
+# Containerfile and CMake files around them. Build the base images first
+# with `make -C base`. The base image ends as the main user (UID 1000) with
+# HOME set, and has rustup, uv and Node.js.
+#
+# files/languages.toml, copied to ~/.config/helix, adds the formatters and
+# the eslint server, and limits each language to the servers installed here.
+
+ARG BASE_IMAGE=localhost/base/dev:latest
+
+FROM ${BASE_IMAGE}
+
+# Release binaries for amd64, the only architecture the build supports,
+# pinned with their SHA-256
+ARG HELIX_VERSION=25.07.1
+ARG HELIX_SHA256=3f08e63ecd388fff657ad39722f88bb03dcf326f1f2da2700d99e1dc40ab2e8b
+ARG MARKSMAN_VERSION=2026-02-08
+ARG MARKSMAN_SHA256=be5098e8213219269c47fc0d916a66fa31ce0602ec967475c722260aabf26087
+# Rust tools installed by cargo
+ARG TAPLO_VERSION=0.10.0
+ARG NEOCMAKELSP_VERSION=0.11.2
+# Python tools installed by uv
+ARG RUFF_VERSION=0.17.1
+ARG TY_VERSION=0.0.89
+# Node.js tools installed by npm. TypeScript 7 is the native Go compiler and
+# has no tsserver, which typescript-language-server drives, so the global
+# TypeScript stays on 6. A project's own node_modules/typescript is used
+# first when it has one.
+ARG TYPESCRIPT_VERSION=6.0.3
+ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=6.0.2
+# From 4.9.0 on, the ESLint server only answers pull requests for
+# diagnostics (textDocument/diagnostic), which helix 25.07 doesn't make, so
+# it shows no lint errors. 4.8.0 still publishes them.
+ARG VSCODE_LANGSERVERS_EXTRACTED_VERSION=4.8.0
+ARG PRETTIER_VERSION=3.9.10
+ARG ESLINT_VERSION=10.13.0
+ARG BASH_LANGUAGE_SERVER_VERSION=5.8.1
+ARG YAML_LANGUAGE_SERVER_VERSION=2.0.0
+ARG DOCKERFILE_LANGUAGE_SERVER_VERSION=0.15.0
+
+# The release binaries below are amd64 only, so a build elsewhere stops
+# here, before the slow steps.
+RUN test "$(dpkg --print-architecture)" = amd64 \
+    || { echo "only amd64 is supported" >&2; exit 1; }
+
+# The base image's Debian hx is helix 25.01, older than the release below,
+# so it is removed. clangd formats C and C++ with clang-format and runs
+# clang-tidy checks when a project has a .clang-tidy file; clang-tidy is
+# also there to run by hand. bash-language-server runs shellcheck on the
+# buffer. marksman is a .NET program and needs ICU.
+USER root
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
+ && apt-get purge -y hx \
+ && apt-get install -y --no-install-recommends \
+        clang-format \
+        clang-tidy \
+        clangd \
+        libicu76 \
+        shellcheck \
+        shfmt
+
+# The release tarball has hx and its runtime: grammars, queries and themes.
+# HELIX_RUNTIME points hx at the runtime, as hx is reached through a link.
+RUN name="helix-${HELIX_VERSION}-x86_64-linux" \
+ && curl -fsSL -o /tmp/helix.tar.xz \
+        "https://github.com/helix-editor/helix/releases/download/${HELIX_VERSION}/${name}.tar.xz" \
+ && echo "${HELIX_SHA256}  /tmp/helix.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/helix.tar.xz -C /opt \
+ && mv "/opt/${name}" /opt/helix \
+ && ln -s /opt/helix/hx /usr/local/bin/hx \
+ && rm /tmp/helix.tar.xz
+ENV HELIX_RUNTIME=/opt/helix/runtime
+
+# marksman (Markdown) release binary. It is in no package manager.
+RUN curl -fsSL -o /usr/local/bin/marksman \
+        "https://github.com/artempyanykh/marksman/releases/download/${MARKSMAN_VERSION}/marksman-linux-x64" \
+ && echo "${MARKSMAN_SHA256}  /usr/local/bin/marksman" | sha256sum -c - \
+ && chmod 0755 /usr/local/bin/marksman \
+ && marksman --version
+
+USER 1000
+
+# rust-analyzer joins clippy and rustfmt in the default toolchain. Debian's
+# rustup already has its proxy in /usr/bin.
+RUN rustup component add rust-analyzer \
+ && rust-analyzer --version
+
+# taplo (TOML) and neocmakelsp (CMake), built from crates.io with the
+# Cargo.lock each crate ships. taplo-cli's default features include its
+# language server. Binaries go to ~/.cargo/bin; the downloaded sources are
+# removed afterwards. One step each, so a version bump rebuilds only that
+# tool.
+RUN cargo install --locked "taplo-cli@${TAPLO_VERSION}" \
+ && rm -rf "${HOME}/.cargo/registry" "${HOME}/.cargo/git" \
+ && taplo --version
+RUN cargo install --locked "neocmakelsp@${NEOCMAKELSP_VERSION}" \
+ && rm -rf "${HOME}/.cargo/registry" "${HOME}/.cargo/git" \
+ && neocmakelsp --version
+
+# ruff lints and formats, ty checks types. Both run as language servers
+# (`ruff server`, `ty server`) and go to ~/.local/bin.
+RUN uv tool install --no-cache "ruff==${RUFF_VERSION}" \
+ && uv tool install --no-cache "ty==${TY_VERSION}" \
+ && ruff --version \
+ && ty --version
+
+# vscode-langservers-extracted has the HTML, CSS, JSON and ESLint servers.
+# The ESLint server loads the eslint a project has in node_modules; the
+# global one is for running by hand. Binaries go to ~/.local/bin.
+RUN npm install -g --no-fund --no-audit \
+        "typescript@${TYPESCRIPT_VERSION}" \
+        "typescript-language-server@${TYPESCRIPT_LANGUAGE_SERVER_VERSION}" \
+        "vscode-langservers-extracted@${VSCODE_LANGSERVERS_EXTRACTED_VERSION}" \
+        "prettier@${PRETTIER_VERSION}" \
+        "eslint@${ESLINT_VERSION}" \
+        "bash-language-server@${BASH_LANGUAGE_SERVER_VERSION}" \
+        "yaml-language-server@${YAML_LANGUAGE_SERVER_VERSION}" \
+        "dockerfile-language-server-nodejs@${DOCKERFILE_LANGUAGE_SERVER_VERSION}" \
+ && npm cache clean --force \
+ && typescript-language-server --version \
+ && prettier --version
+
+COPY --chown=1000:1000 files/languages.toml ${HOME}/.config/helix/languages.toml
+
+# Fails the build, printing `hx --health` for each language at fault, if a
+# language is missing a server, formatter or tree-sitter parser. Debug
+# adapters are not installed, so their section is skipped, and helix itself
+# lacks textobject or indent queries for some languages.
+RUN hx --version \
+ && failed= \
+ && for lang in rust python javascript typescript tsx jsx bash html css \
+                scss c cpp json jsonc toml yaml markdown dockerfile cmake; do \
+        if ! hx --health "$lang" | awk ' \
+                /^Configured debug adapter/ { d = 1; next } \
+                /^Configured/ { d = 0 } \
+                /not found in \$PATH/ && !d { bad = 1 } \
+                /^Tree-sitter parser:.*✘/ { bad = 1 } \
+                END { exit bad }'; then \
+            hx --health "$lang"; \
+            failed=1; \
+        fi; \
+    done \
+ && test -z "$failed"
+
+CMD ["hx"]

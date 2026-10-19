@@ -1,0 +1,32 @@
+# Base images from Containerfile, one service per target, only for building
+# and as a reference to the image names. Build them with the Makefile:
+#
+#   make -C base
+#
+# It builds one target at a time, in order. A plain `podman-compose build`
+# starts every service's build at once, and each builds the shared stages
+# again. Images are used with FROM, not run from here.
+
+x-build: &build
+  context: ../base
+  args:
+    USERNAME: ${CT_USERNAME:-user}
+
+services:
+  base:
+    build:
+      <<: *build
+      target: base
+    image: localhost/base/base:latest
+
+  dev:
+    build:
+      <<: *build
+      target: dev
+    image: localhost/base/dev:latest
+
+  podman-in-podman:
+    build:
+      <<: *build
+      target: podman-in-podman
+    image: localhost/base/podman-in-podman:latest

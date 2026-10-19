@@ -1,0 +1,5 @@
+# Claude Code runtime state, not source
+/.cache/
+/.claude/
+/.claude.json
+/.local/
