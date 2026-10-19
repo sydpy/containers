@@ -1,8 +1,8 @@
 # Helix image, on top of the dev base image from ../base/Containerfile,
 # with language servers, linters and formatters for Rust, Python, JS/TS,
 # shell, HTML, CSS, C and C++, and for the TOML, YAML, Markdown,
-# Containerfile and CMake files around them. Build the base images first
-# with `make -C base`. The base image ends as the main user (UID 1000) with
+# Containerfile and CMake files around them. `make helix` builds the base
+# images first. The base image ends as the main user (UID 1000) with
 # HOME set, and has rustup, uv and Node.js.
 #
 # files/languages.toml, copied to ~/.config/helix, adds the formatters and

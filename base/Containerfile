@@ -5,9 +5,9 @@
 #   dev               development tools: Rust (rustup), Python (uv), Node.js
 #   podman-in-podman  rootless podman for the user, nested in the outer one
 #
-# ../compose/base.yml names them localhost/base/<target>:latest, and the
-# Makefile builds them in order. Every target ends as the main user, with
-# HOME set, so an image built FROM one of them starts as that user and
+# ../compose/base.yml names them localhost/base/<target>:latest, and
+# ../Makefile builds them in order. Every target ends as the main user,
+# with HOME set, so an image built FROM one of them starts as that user and
 # switches to root only for the steps that need it.
 #
 # apt runs with /var/cache/apt and /var/lib/apt/lists as cache mounts, which

@@ -1,5 +1,5 @@
 # Pi coding agent image, on top of the podman-in-podman base image from
-# ../base/Containerfile. Build the base images first with `make -C base`.
+# ../base/Containerfile. `make pi` builds the base images first.
 # The base image ends as the main user (UID 1000) with HOME set, and has
 # Node.js, with `npm install -g` going to ~/.local.
 #

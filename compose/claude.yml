@@ -1,6 +1,6 @@
 services:
   claude:
-    # Built FROM localhost/base/podman-in-podman; run `make -C base` first.
+    # Built FROM localhost/base/podman-in-podman; `make claude` builds both.
     # CT_USERNAME must match the USERNAME the base images were built
     # with, since it names the home directory.
     build:

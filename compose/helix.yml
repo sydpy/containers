@@ -1,6 +1,6 @@
 services:
   helix:
-    # Built FROM localhost/base/dev; run `make -C base` first. CT_USERNAME
+    # Built FROM localhost/base/dev; `make helix` builds both. CT_USERNAME
     # must match the USERNAME the base images were built with, since it
     # names the home directory.
     build:
