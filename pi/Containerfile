@@ -21,10 +21,12 @@ ENV PI_SKIP_VERSION_CHECK=1 \
     PI_TELEMETRY=0
 
 # pi's install instructions skip install scripts; the package needs none.
-# Binaries go to ~/.local/bin.
-RUN npm install -g --no-fund --no-audit --ignore-scripts \
+# Binaries go to ~/.local/bin. npm's download cache, ~/.npm, is a cache
+# mount owned by the user: it stays out of the image and is reused by the
+# next build, which then downloads only the packages that changed.
+RUN --mount=type=cache,target=${HOME}/.npm,uid=1000,gid=1000 \
+    npm install -g --no-fund --no-audit --ignore-scripts \
         "@earendil-works/pi-coding-agent@${PI_VERSION}" \
- && npm cache clean --force \
  && pi --version \
  && pi install npm:pi-subagents \
  && pi install npm:pi-pigment \

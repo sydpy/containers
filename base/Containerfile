@@ -116,10 +116,15 @@ RUN uv python install --default "${PYTHON_VERSION}" \
 # ~/.local/bin, rather than to the root-owned /usr/local. Corepack's pnpm
 # and yarn shims go there too; corepack downloads the package manager a
 # project asks for on first use, without prompting. node-gyp builds native
-# modules with build-essential and the python3 from uv.
+# modules with build-essential and the python3 from uv. npm's cache
+# directory, ~/.npm, is made here so that the user owns it: images built on
+# this one mount a build cache there, and podman would otherwise create the
+# mount point owned by root, leaving npm unable to write its cache at run
+# time.
 ENV NPM_CONFIG_PREFIX=/home/${USERNAME}/.local \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable --install-directory "${HOME}/.local/bin" \
+RUN mkdir -p "${HOME}/.npm" \
+ && corepack enable --install-directory "${HOME}/.local/bin" \
  && node --version \
  && npm --version
 

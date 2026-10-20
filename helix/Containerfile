@@ -18,9 +18,12 @@ ARG HELIX_VERSION=25.07.1
 ARG HELIX_SHA256=3f08e63ecd388fff657ad39722f88bb03dcf326f1f2da2700d99e1dc40ab2e8b
 ARG MARKSMAN_VERSION=2026-02-08
 ARG MARKSMAN_SHA256=be5098e8213219269c47fc0d916a66fa31ce0602ec967475c722260aabf26087
-# Rust tools installed by cargo
+# taplo publishes no checksums; this SHA-256 is of the download made when
+# the version was pinned. neocmakelsp's matches its .sha256 release asset.
 ARG TAPLO_VERSION=0.10.0
+ARG TAPLO_SHA256=8fe196b894ccf9072f98d4e1013a180306e17d244830b03986ee5e8eabeb6156
 ARG NEOCMAKELSP_VERSION=0.11.2
+ARG NEOCMAKELSP_SHA256=d9e71ea1cfd6584689b4fc8e985285c30247f9af393b77cb2460a969ff79abfe
 # Python tools installed by uv
 ARG RUFF_VERSION=0.17.1
 ARG TY_VERSION=0.0.89
@@ -82,6 +85,23 @@ RUN curl -fsSL -o /usr/local/bin/marksman \
  && chmod 0755 /usr/local/bin/marksman \
  && marksman --version
 
+# taplo (TOML) and neocmakelsp (CMake) release binaries, rather than a
+# `cargo install` that compiles each for minutes. taplo's binary includes
+# its language server (`taplo lsp`).
+RUN curl -fsSL -o /tmp/taplo.gz \
+        "https://github.com/tamasfe/taplo/releases/download/${TAPLO_VERSION}/taplo-linux-x86_64.gz" \
+ && echo "${TAPLO_SHA256}  /tmp/taplo.gz" | sha256sum -c - \
+ && gzip -dc /tmp/taplo.gz > /usr/local/bin/taplo \
+ && chmod 0755 /usr/local/bin/taplo \
+ && rm /tmp/taplo.gz \
+ && taplo --version
+RUN curl -fsSL -o /tmp/neocmakelsp.tar.gz \
+        "https://github.com/Decodetalkers/neocmakelsp/releases/download/v${NEOCMAKELSP_VERSION}/neocmakelsp-x86_64-unknown-linux-gnu.tar.gz" \
+ && echo "${NEOCMAKELSP_SHA256}  /tmp/neocmakelsp.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/neocmakelsp.tar.gz -C /usr/local/bin neocmakelsp \
+ && rm /tmp/neocmakelsp.tar.gz \
+ && neocmakelsp --version
+
 USER 1000
 
 # rust-analyzer joins clippy and rustfmt in the default toolchain. Debian's
@@ -89,29 +109,24 @@ USER 1000
 RUN rustup component add rust-analyzer \
  && rust-analyzer --version
 
-# taplo (TOML) and neocmakelsp (CMake), built from crates.io with the
-# Cargo.lock each crate ships. taplo-cli's default features include its
-# language server. Binaries go to ~/.cargo/bin; the downloaded sources are
-# removed afterwards. One step each, so a version bump rebuilds only that
-# tool.
-RUN cargo install --locked "taplo-cli@${TAPLO_VERSION}" \
- && rm -rf "${HOME}/.cargo/registry" "${HOME}/.cargo/git" \
- && taplo --version
-RUN cargo install --locked "neocmakelsp@${NEOCMAKELSP_VERSION}" \
- && rm -rf "${HOME}/.cargo/registry" "${HOME}/.cargo/git" \
- && neocmakelsp --version
-
 # ruff lints and formats, ty checks types. Both run as language servers
-# (`ruff server`, `ty server`) and go to ~/.local/bin.
-RUN uv tool install --no-cache "ruff==${RUFF_VERSION}" \
- && uv tool install --no-cache "ty==${TY_VERSION}" \
+# (`ruff server`, `ty server`) and go to ~/.local/bin. uv's cache,
+# ~/.cache/uv, is a cache mount owned by the user, reused by the next build.
+# uv can't hardlink from a cache on another filesystem, so it copies.
+RUN --mount=type=cache,target=${HOME}/.cache/uv,uid=1000,gid=1000 \
+    export UV_LINK_MODE=copy \
+ && uv tool install "ruff==${RUFF_VERSION}" \
+ && uv tool install "ty==${TY_VERSION}" \
  && ruff --version \
  && ty --version
 
 # vscode-langservers-extracted has the HTML, CSS, JSON and ESLint servers.
 # The ESLint server loads the eslint a project has in node_modules; the
-# global one is for running by hand. Binaries go to ~/.local/bin.
-RUN npm install -g --no-fund --no-audit \
+# global one is for running by hand. Binaries go to ~/.local/bin. npm's
+# download cache, ~/.npm, is a cache mount owned by the user, reused by the
+# next build.
+RUN --mount=type=cache,target=${HOME}/.npm,uid=1000,gid=1000 \
+    npm install -g --no-fund --no-audit \
         "typescript@${TYPESCRIPT_VERSION}" \
         "typescript-language-server@${TYPESCRIPT_LANGUAGE_SERVER_VERSION}" \
         "vscode-langservers-extracted@${VSCODE_LANGSERVERS_EXTRACTED_VERSION}" \
@@ -120,7 +135,6 @@ RUN npm install -g --no-fund --no-audit \
         "bash-language-server@${BASH_LANGUAGE_SERVER_VERSION}" \
         "yaml-language-server@${YAML_LANGUAGE_SERVER_VERSION}" \
         "dockerfile-language-server-nodejs@${DOCKERFILE_LANGUAGE_SERVER_VERSION}" \
- && npm cache clean --force \
  && typescript-language-server --version \
  && prettier --version
 

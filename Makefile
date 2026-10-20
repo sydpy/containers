@@ -7,7 +7,8 @@ BINDIR ?= $(HOME)/.local/bin
 # shared stages again. Every other compose/TOOL.yml is a tool, with a service
 # named TOOL, and gets a target named TOOL that builds the base images first.
 # CT_USERNAME from the environment sets the main user's name, as in the
-# compose files.
+# compose files. JOBS is how many stages of one build run at once
+# (podman build --jobs).
 #
 #   make images                    every image
 #   make base                      the base images only
@@ -15,8 +16,10 @@ BINDIR ?= $(HOME)/.local/bin
 #   make images BUILD_ARGS=--no-cache
 
 # podman-compose 1.3.0 changes to the compose file's directory before
-# opening it, so the path must be absolute.
-COMPOSE = podman-compose -f
+# opening it, so the path must be absolute. --podman-build-args is a
+# global option and goes before the file.
+JOBS = 8
+COMPOSE = podman-compose --podman-build-args="--jobs $(JOBS)" -f
 BUILD_ARGS =
 
 BASE_TARGETS = base dev podman-in-podman
