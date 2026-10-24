@@ -36,9 +36,20 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean \
  && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' \
         > /etc/apt/apt.conf.d/keep-cache
 
+# The slim base image's /etc/dpkg/dpkg.cfg.d/docker excludes
+# /usr/share/man/*. The file below, read after it, lets the English man
+# pages back in; translations stay out. The packages already in the base
+# image were unpacked without theirs, so the ones that ship man pages are
+# reinstalled. man-db indexes the pages, and its dpkg trigger updates the
+# index whenever a later install adds more.
+RUN printf '%s\n' 'path-include /usr/share/man/man*' \
+        > /etc/dpkg/dpkg.cfg.d/man-pages
+
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update \
+ && apt-get install -y --no-install-recommends --reinstall \
+        $(dpkg -S '/usr/share/man/man*' | sed 's/: .*//; s/, /\n/g' | sort -u) \
  && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
@@ -48,6 +59,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         gnupg \
         less \
         libssl-dev \
+        man-db \
+        manpages \
+        manpages-dev \
         openssh-client \
         pkg-config \
         procps \
