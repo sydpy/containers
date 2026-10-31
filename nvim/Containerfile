@@ -1,0 +1,149 @@
+# Neovim image, on top of the dev base image from ../base/Containerfile,
+# with the language servers, linters and formatters of the helix image
+# (../helix/Containerfile), at the same versions. `make nvim` builds the
+# base images first. The base image ends as the main user (UID 1000) with
+# HOME set, and has rustup, uv and Node.js.
+#
+# The setup has no plugins. files/sysinit.vim and files/lua/container.lua,
+# copied to /etc/xdg/nvim, configure the language servers, the formatters
+# and the keys, and leave ~/.config/nvim to the user.
+
+ARG BASE_IMAGE=localhost/base/dev:latest
+
+FROM ${BASE_IMAGE}
+
+# Release binaries for amd64, the only architecture the build supports,
+# pinned with their SHA-256
+ARG NEOVIM_VERSION=0.12.6
+ARG NEOVIM_SHA256=474430d53e6264f6d6dd18db42d6dc9df3a1b56ca9e88a325bbf860e1a811d87
+ARG MARKSMAN_VERSION=2026-02-08
+ARG MARKSMAN_SHA256=be5098e8213219269c47fc0d916a66fa31ce0602ec967475c722260aabf26087
+# taplo publishes no checksums; this SHA-256 is of the download made when
+# the version was pinned. neocmakelsp's matches its .sha256 release asset.
+ARG TAPLO_VERSION=0.10.0
+ARG TAPLO_SHA256=8fe196b894ccf9072f98d4e1013a180306e17d244830b03986ee5e8eabeb6156
+ARG NEOCMAKELSP_VERSION=0.11.2
+ARG NEOCMAKELSP_SHA256=d9e71ea1cfd6584689b4fc8e985285c30247f9af393b77cb2460a969ff79abfe
+# Python tools installed by uv
+ARG RUFF_VERSION=0.17.1
+ARG TY_VERSION=0.0.89
+# Node.js tools installed by npm. TypeScript 7 is the native Go compiler and
+# has no tsserver, which typescript-language-server drives, so the global
+# TypeScript stays on 6. A project's own node_modules/typescript is used
+# first when it has one.
+ARG TYPESCRIPT_VERSION=6.0.3
+ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=6.0.2
+# Neovim makes the pull requests for diagnostics that the ESLint server
+# answers from 4.9.0 on, but the server stays on helix's 4.8.0, which the
+# settings in container.lua were written for.
+ARG VSCODE_LANGSERVERS_EXTRACTED_VERSION=4.8.0
+ARG PRETTIER_VERSION=3.9.10
+ARG ESLINT_VERSION=10.13.0
+ARG BASH_LANGUAGE_SERVER_VERSION=5.8.1
+ARG YAML_LANGUAGE_SERVER_VERSION=2.0.0
+ARG DOCKERFILE_LANGUAGE_SERVER_VERSION=0.15.0
+
+# The release binaries below are amd64 only, so a build elsewhere stops
+# here, before the slow steps.
+RUN test "$(dpkg --print-architecture)" = amd64 \
+    || { echo "only amd64 is supported" >&2; exit 1; }
+
+# clangd formats C and C++ with clang-format and runs clang-tidy checks
+# when a project has a .clang-tidy file; clang-tidy is also there to run by
+# hand. bash-language-server runs shellcheck on the buffer. marksman is a
+# .NET program and needs ICU.
+USER root
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
+ && apt-get install -y --no-install-recommends \
+        clang-format \
+        clang-tidy \
+        clangd \
+        libicu76 \
+        shellcheck \
+        shfmt
+
+# Debian's neovim is 0.10, older than the vim.lsp.config, completion and
+# command-line features container.lua uses. The release tarball has nvim
+# and its runtime, which nvim finds from its own path through the link.
+RUN name="nvim-linux-x86_64" \
+ && curl -fsSL -o /tmp/nvim.tar.gz \
+        "https://github.com/neovim/neovim/releases/download/v${NEOVIM_VERSION}/${name}.tar.gz" \
+ && echo "${NEOVIM_SHA256}  /tmp/nvim.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/nvim.tar.gz -C /opt \
+ && mv "/opt/${name}" /opt/nvim \
+ && ln -s /opt/nvim/bin/nvim /usr/local/bin/nvim \
+ && rm /tmp/nvim.tar.gz
+ENV EDITOR=nvim
+
+# marksman (Markdown) release binary. It is in no package manager.
+RUN curl -fsSL -o /usr/local/bin/marksman \
+        "https://github.com/artempyanykh/marksman/releases/download/${MARKSMAN_VERSION}/marksman-linux-x64" \
+ && echo "${MARKSMAN_SHA256}  /usr/local/bin/marksman" | sha256sum -c - \
+ && chmod 0755 /usr/local/bin/marksman \
+ && marksman --version
+
+# taplo (TOML) and neocmakelsp (CMake) release binaries, rather than a
+# `cargo install` that compiles each for minutes. taplo's binary includes
+# its language server (`taplo lsp`).
+RUN curl -fsSL -o /tmp/taplo.gz \
+        "https://github.com/tamasfe/taplo/releases/download/${TAPLO_VERSION}/taplo-linux-x86_64.gz" \
+ && echo "${TAPLO_SHA256}  /tmp/taplo.gz" | sha256sum -c - \
+ && gzip -dc /tmp/taplo.gz > /usr/local/bin/taplo \
+ && chmod 0755 /usr/local/bin/taplo \
+ && rm /tmp/taplo.gz \
+ && taplo --version
+RUN curl -fsSL -o /tmp/neocmakelsp.tar.gz \
+        "https://github.com/Decodetalkers/neocmakelsp/releases/download/v${NEOCMAKELSP_VERSION}/neocmakelsp-x86_64-unknown-linux-gnu.tar.gz" \
+ && echo "${NEOCMAKELSP_SHA256}  /tmp/neocmakelsp.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/neocmakelsp.tar.gz -C /usr/local/bin neocmakelsp \
+ && rm /tmp/neocmakelsp.tar.gz \
+ && neocmakelsp --version
+
+COPY files/sysinit.vim /etc/xdg/nvim/sysinit.vim
+COPY files/container.lua /etc/xdg/nvim/lua/container.lua
+
+USER 1000
+
+# rust-analyzer joins clippy and rustfmt in the default toolchain. Debian's
+# rustup already has its proxy in /usr/bin.
+RUN rustup component add rust-analyzer \
+ && rust-analyzer --version
+
+# ruff lints and formats, ty checks types. Both run as language servers
+# (`ruff server`, `ty server`) and go to ~/.local/bin. uv's cache,
+# ~/.cache/uv, is a cache mount owned by the user, reused by the next build.
+# uv can't hardlink from a cache on another filesystem, so it copies.
+RUN --mount=type=cache,target=${HOME}/.cache/uv,uid=1000,gid=1000 \
+    export UV_LINK_MODE=copy \
+ && uv tool install "ruff==${RUFF_VERSION}" \
+ && uv tool install "ty==${TY_VERSION}" \
+ && ruff --version \
+ && ty --version
+
+# vscode-langservers-extracted has the HTML, CSS, JSON and ESLint servers.
+# The ESLint server loads the eslint a project has in node_modules; the
+# global one is for running by hand. Binaries go to ~/.local/bin. npm's
+# download cache, ~/.npm, is a cache mount owned by the user, reused by the
+# next build.
+RUN --mount=type=cache,target=${HOME}/.npm,uid=1000,gid=1000 \
+    npm install -g --no-fund --no-audit \
+        "typescript@${TYPESCRIPT_VERSION}" \
+        "typescript-language-server@${TYPESCRIPT_LANGUAGE_SERVER_VERSION}" \
+        "vscode-langservers-extracted@${VSCODE_LANGSERVERS_EXTRACTED_VERSION}" \
+        "prettier@${PRETTIER_VERSION}" \
+        "eslint@${ESLINT_VERSION}" \
+        "bash-language-server@${BASH_LANGUAGE_SERVER_VERSION}" \
+        "yaml-language-server@${YAML_LANGUAGE_SERVER_VERSION}" \
+        "dockerfile-language-server-nodejs@${DOCKERFILE_LANGUAGE_SERVER_VERSION}" \
+ && typescript-language-server --version \
+ && prettier --version
+
+# Fails the build, listing what is at fault, if a language has no server,
+# or a server or formatter is missing (see files/check.lua).
+RUN --mount=type=bind,source=files/check.lua,target=/tmp/check.lua \
+    nvim --version \
+ && nvim --headless -l /tmp/check.lua
+
+CMD ["nvim"]
