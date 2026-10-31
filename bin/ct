@@ -1,8 +1,13 @@
 #!/bin/bash
-# Usage: ct [-h] [-w] TOOL [PODMAN-COMPOSE ARGS...]
+# Usage: ct [-h] [-n] [-w] TOOL [PODMAN-COMPOSE ARGS...]
 # Runs podman-compose on compose/TOOL.yml. -w mounts the current directory on
 # /workspace, as if CT_WORKSPACE=$PWD were set. Arguments after TOOL go to
 # podman-compose unchanged.
+#
+# With a workspace set, $CT_WORKSPACE/.ct/TOOL.yml is added as a second
+# compose file if it exists; -n skips it. Relative paths in it resolve against
+# $CT_HOME/compose, not the workspace, so write them as ${CT_WORKSPACE}/...
+# or as absolute paths.
 
 # -u makes unset variables an error, so optional ones are read as ${VAR-}.
 set -eu
@@ -30,7 +35,7 @@ list_tools() {
 }
 
 print_usage() {
-  echo "usage: ct [-h] [-w] TOOL [PODMAN-COMPOSE ARGS...]"
+  echo "usage: ct [-h] [-n] [-w] TOOL [PODMAN-COMPOSE ARGS...]"
   echo "tools: $(list_tools)"
 }
 
@@ -53,12 +58,14 @@ if [ ! -d "$CT_HOME/compose" ]; then
   die "no compose directory in CT_HOME ($CT_HOME)"
 fi
 
-while getopts hw opt; do
+use_override=1
+while getopts hnw opt; do
   case $opt in
     h)
       print_usage
       exit 0
       ;;
+    n) use_override= ;;
     w) CT_WORKSPACE=$PWD ;;
     *) usage_error ;;
   esac
@@ -98,4 +105,19 @@ if [ -n "${CT_WORKSPACE-}" ]; then
   export CT_WORKSPACE
 fi
 
-exec podman-compose -f "$compose_file" -p "$project" "$@"
+# The tool's own file comes first: podman-compose takes the project directory
+# from the first file given.
+compose_args=(-f "$compose_file")
+if [ -n "$use_override" ] && [ -n "${CT_WORKSPACE-}" ]; then
+  override="$CT_WORKSPACE/.ct/$tool.yml"
+  # -L also catches a dangling symlink, which -e reports as missing.
+  if [ -e "$override" ] || [ -L "$override" ]; then
+    if [ ! -f "$override" ] || [ ! -r "$override" ]; then
+      die "not a readable file: $override"
+    fi
+    echo "ct: using $override" >&2
+    compose_args+=(-f "$override")
+  fi
+fi
+
+exec podman-compose "${compose_args[@]}" -p "$project" "$@"
